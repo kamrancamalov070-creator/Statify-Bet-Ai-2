@@ -70,8 +70,8 @@ def main(page: ft.Page):
             height=110,
             border_radius=55,
             bgcolor=NAVY_DARK,
-            border=ft.Border.all(3, GREEN),  # ✅ DÜZƏLİŞ EDİLDİ
-            alignment=ft.alignment.center,
+            border=ft.Border.all(3, GREEN),  # ✅ düzəldildi
+            alignment=ft.Alignment(0, 0),    # ✅ düzəldildi (əvvəl ft.alignment.center)
             content=ft.Icon(ft.Icons.SPORTS_SOCCER, color=GREEN, size=56),
             scale=ft.Scale(0.6),
             opacity=0,
@@ -125,13 +125,12 @@ def main(page: ft.Page):
 
         view = ft.Container(
             content=column,
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment(0, 0),    # ✅ düzəldildi
             expand=True,
             bgcolor=NAVY,
         )
 
         async def animate_and_continue():
-            # trigger fade-in / scale-up shortly after mount
             await asyncio.sleep(0.15)
             logo_circle.opacity = 1
             logo_circle.scale = ft.Scale(1.0)
@@ -199,10 +198,6 @@ def main(page: ft.Page):
         age_checkbox.on_change = refresh_continue_state
 
         async def handle_google_sign_in(e):
-            # --- Replace this block with real OAuth (e.g. flet's
-            # page.login() with a Google OAuth provider, or your backend
-            # auth flow). This simulates a successful sign-in so the UI
-            # flow can be wired up and tested end-to-end.
             google_button.disabled = True
             google_button.text = "Signing in..."
             page.update()
@@ -279,7 +274,7 @@ def main(page: ft.Page):
         view = ft.Container(
             expand=True,
             bgcolor=NAVY,
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment(0, 0),    # ✅ düzəldildi
             content=ft.Column(
                 controls=[header, ft.Container(height=28), card],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -347,7 +342,7 @@ def main(page: ft.Page):
                 padding=16,
                 border_radius=14,
                 bgcolor=CARD_BG,
-                border=ft.Border.all(1, GREEN_DARK if not locked else NAVY_DARK),  # ✅ DÜZƏLİŞ EDİLDİ
+                border=ft.Border.all(1, GREEN_DARK if not locked else NAVY_DARK),  # ✅ düzəldildi
                 content=content,
             )
 
@@ -390,7 +385,7 @@ def main(page: ft.Page):
         # ---------------- VIP TAB ----------------
         def unlock_vip(e):
             state.is_vip = True
-            show(build_main_app())  # rebuild with VIP unlocked (tab index preserved below)
+            show(build_main_app())
             nav.selected_index = 1
             page.update()
 
