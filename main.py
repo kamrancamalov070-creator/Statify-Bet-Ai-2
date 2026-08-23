@@ -70,7 +70,7 @@ def main(page: ft.Page):
             height=110,
             border_radius=55,
             bgcolor=NAVY_DARK,
-            border=ft.border.all(3, GREEN),
+            border=ft.Border.all(3, GREEN),  # ✅ DÜZƏLİŞ EDİLDİ
             alignment=ft.alignment.center,
             content=ft.Icon(ft.Icons.SPORTS_SOCCER, color=GREEN, size=56),
             scale=ft.Scale(0.6),
@@ -347,7 +347,7 @@ def main(page: ft.Page):
                 padding=16,
                 border_radius=14,
                 bgcolor=CARD_BG,
-                border=ft.border.all(1, GREEN_DARK if not locked else NAVY_DARK),
+                border=ft.Border.all(1, GREEN_DARK if not locked else NAVY_DARK),  # ✅ DÜZƏLİŞ EDİLDİ
                 content=content,
             )
 
