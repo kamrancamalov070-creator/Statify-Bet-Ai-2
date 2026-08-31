@@ -7,10 +7,13 @@ import re
 from datetime import datetime
 
 from flask import Flask
-from aiogram import Bot, Dispatcher, F, Router, types
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -18,24 +21,22 @@ from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
-from aiogram.utils.markdown import hbold, hlink
+from aiogram.utils.markdown import hbold
 
 from texts import TEXTS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -------------------- ENV & ADMIN --------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8105745014:AAHqgQunU4gK5fWwi4bFwE1GXuludZpFz3Y")
-ADMIN_USERNAME = "kamrancmlv"  # İstifadəçi adı ( @ olmadan )
+ADMIN_USERNAME = "kamrancmlv"
+STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)
 
-# İsterseniz şəkil URL-i əlavə edin (statistika görseli)
-STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)  # məs. "https://example.com/stats.png"
-
-# -------------------- DATABASE --------------------
 DB_NAME = "bot_data.db"
 
+# ---------- DATABASE ----------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -43,11 +44,16 @@ def init_db():
                  (user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'tr')''')
     c.execute('''CREATE TABLE IF NOT EXISTS matches
                  (match_id TEXT PRIMARY KEY, date TEXT, league TEXT,
-                  home TEXT, away TEXT, pred_tr TEXT, pred_en TEXT)''')
+                  home TEXT, away TEXT, pred_tr TEXT, pred_en TEXT,
+                  category TEXT DEFAULT 'normal')''')
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
                  (ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER, message TEXT, timestamp TEXT,
                   replied INTEGER DEFAULT 0)''')
+    try:
+        c.execute("ALTER TABLE matches ADD COLUMN category TEXT DEFAULT 'normal'")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -68,10 +74,10 @@ def set_user_lang(user_id: int, lang: str):
     conn.commit()
     conn.close()
 
-def get_all_matches():
+def get_matches_by_category(category: str):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT match_id, date, league, home, away, pred_tr, pred_en FROM matches ORDER BY date")
+    c.execute("SELECT match_id, date, league, home, away, pred_tr, pred_en FROM matches WHERE category = ? ORDER BY date", (category,))
     rows = c.fetchall()
     conn.close()
     matches = {}
@@ -86,28 +92,48 @@ def get_all_matches():
         }
     return matches
 
+def get_all_matches():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT match_id, date, league, home, away, pred_tr, pred_en, category FROM matches ORDER BY date")
+    rows = c.fetchall()
+    conn.close()
+    matches = {}
+    for row in rows:
+        match_id, date, league, home, away, pred_tr, pred_en, category = row
+        matches[match_id] = {
+            "date": date,
+            "league": league,
+            "home": home,
+            "away": away,
+            "prediction": {"tr": pred_tr, "en": pred_en},
+            "category": category
+        }
+    return matches
+
 def get_match(match_id: str):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT date, league, home, away, pred_tr, pred_en FROM matches WHERE match_id = ?", (match_id,))
+    c.execute("SELECT date, league, home, away, pred_tr, pred_en, category FROM matches WHERE match_id = ?", (match_id,))
     row = c.fetchone()
     conn.close()
     if row:
-        date, league, home, away, pred_tr, pred_en = row
+        date, league, home, away, pred_tr, pred_en, category = row
         return {
             "date": date,
             "league": league,
             "home": home,
             "away": away,
-            "prediction": {"tr": pred_tr, "en": pred_en}
+            "prediction": {"tr": pred_tr, "en": pred_en},
+            "category": category
         }
     return None
 
-def add_match(match_id, date, league, home, away, pred_tr, pred_en):
+def add_match(match_id, date, league, home, away, pred_tr, pred_en, category='normal'):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO matches (match_id, date, league, home, away, pred_tr, pred_en) VALUES (?,?,?,?,?,?,?)",
-              (match_id, date, league, home, away, pred_tr, pred_en))
+    c.execute("INSERT OR REPLACE INTO matches (match_id, date, league, home, away, pred_tr, pred_en, category) VALUES (?,?,?,?,?,?,?,?)",
+              (match_id, date, league, home, away, pred_tr, pred_en, category))
     conn.commit()
     conn.close()
 
@@ -144,19 +170,16 @@ def mark_ticket_replied(ticket_id):
     conn.commit()
     conn.close()
 
-# -------------------- HELPERS --------------------
-def is_admin(user: types.User) -> bool:
+def is_admin(user) -> bool:
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
 
 def parse_match_date(date_str: str):
-    """'28.08 21:45 (UTC+3)' → datetime object (cari il ilə)"""
     try:
         match = re.match(r'(\d{2})\.(\d{2}) (\d{2}):(\d{2})', date_str)
         if match:
             day, month, hour, minute = map(int, match.groups())
             now = datetime.now()
             year = now.year
-            # Əgər ay yanvardırsa və indiki ay dekabrdırsa, il əvvəlki il ola bilər? Sadəlik üçün cari il.
             dt = datetime(year, month, day, hour, minute)
             return dt
     except:
@@ -167,14 +190,25 @@ def is_past_match(date_str: str) -> bool:
     dt = parse_match_date(date_str)
     if dt:
         return dt < datetime.now()
-    return False  # parse olunmazsa keçmiş sayma
+    return False
 
-# -------------------- BOT & ROUTER --------------------
+# ---------- FSM STATES ----------
+class AddMatchStates(StatesGroup):
+    waiting_date = State()
+    waiting_league = State()
+    waiting_home = State()
+    waiting_away = State()
+    waiting_prediction = State()
+    waiting_analysis = State()
+    # Kateqoriya sualı ləğv edildi!
+
+# ---------- BOT & ROUTER ----------
+storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)
 router = Router()
 
-# -------------------- KEYBOARDS --------------------
+# ---------- KEYBOARDS ----------
 def language_inline_kb():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -195,7 +229,7 @@ def main_menu_kb(lang: str):
         resize_keyboard=True,
     )
 
-def tips_inline_kb(matches: dict):
+def tips_inline_kb(matches: dict, back_callback='back_to_tips'):
     rows = []
     for match_id, m in matches.items():
         label = f"{m['date']} {m['home']} — {m['away']}"
@@ -213,7 +247,6 @@ def match_detail_text(match_id: str, lang: str):
         f"{m['prediction'][lang]}"
     )
 
-# -------------------- LABELS FOR FILTERING --------------------
 def _labels(key: str):
     return {TEXTS["tr"][key], TEXTS["en"][key]}
 
@@ -223,23 +256,13 @@ VIP_LABELS = _labels("menu_vip")
 SUPPORT_LABELS = _labels("menu_support")
 LANGUAGE_LABELS = _labels("menu_language")
 
-# -------------------- HANDLERS --------------------
+# ---------- HANDLERS ----------
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    name = message.from_user.first_name or "İstifadəçi"
-    # Əgər STATS_IMAGE_URL varsa şəkil göndər, yoxsa sadəcə mətn
-    if STATS_IMAGE_URL:
-        await bot.send_photo(
-            chat_id=message.chat.id,
-            photo=STATS_IMAGE_URL,
-            caption=TEXTS["tr"]["choose_language_prompt"].format(name=name),
-            reply_markup=language_inline_kb()
-        )
-    else:
-        await message.answer(
-            TEXTS["tr"]["choose_language_prompt"].format(name=name),
-            reply_markup=language_inline_kb()
-        )
+    await message.answer(
+        TEXTS["tr"]["choose_language"],
+        reply_markup=language_inline_kb()
+    )
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_language(callback: CallbackQuery):
@@ -248,19 +271,37 @@ async def process_language(callback: CallbackQuery):
         lang = "tr"
     set_user_lang(callback.from_user.id, lang)
     t = TEXTS[lang]
-    # Orijinal mesajı redaktə etmirik, sadəcə altına menyu göndəririk
+    name = callback.from_user.first_name or "İstifadəçi"
+    await callback.message.edit_text(t["welcome"].format(name=name))
     await callback.message.answer(t["menu_prompt"], reply_markup=main_menu_kb(lang))
     await callback.answer()
+
+@router.message(F.text.in_(LANGUAGE_LABELS))
+async def change_language(message: Message):
+    await message.answer(
+        TEXTS["tr"]["choose_language"],
+        reply_markup=language_inline_kb()
+    )
 
 @router.message(F.text.in_(TIPS_LABELS))
 async def show_tips(message: Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
-    matches = get_all_matches()
+    matches = get_matches_by_category('normal')
     if not matches:
         await message.answer(t["no_matches"])
         return
     await message.answer(t["tips_title"], reply_markup=tips_inline_kb(matches))
+
+@router.message(F.text.in_(VIP_LABELS))
+async def show_vip(message: Message):
+    lang = get_user_lang(message.from_user.id)
+    t = TEXTS[lang]
+    matches = get_matches_by_category('vip')
+    if not matches:
+        await message.answer(t["no_matches"])
+        return
+    await message.answer(t["vip_title"], reply_markup=tips_inline_kb(matches))
 
 @router.callback_query(F.data.startswith("match_"))
 async def show_match(callback: CallbackQuery):
@@ -281,7 +322,7 @@ async def show_match(callback: CallbackQuery):
 async def back_to_tips(callback: CallbackQuery):
     lang = get_user_lang(callback.from_user.id)
     t = TEXTS[lang]
-    matches = get_all_matches()
+    matches = get_matches_by_category('normal')
     if not matches:
         await callback.message.edit_text(t["no_matches"])
         await callback.answer()
@@ -298,18 +339,11 @@ async def show_history(message: Message):
     if not past_matches:
         await message.answer(t["no_history"])
         return
-    lines = []
-    for mid, m in past_matches.items():
-        lines.append(f"• {m['date']} – {m['league']}: {m['home']} vs {m['away']}")
+    lines = [f"• {m['date']} – {m['league']}: {m['home']} vs {m['away']}" for mid, m in past_matches.items()]
     await message.answer(t["history_text"].format(matches="\n".join(lines)))
 
-@router.message(F.text.in_(VIP_LABELS))
-async def show_vip(message: Message):
-    lang = get_user_lang(message.from_user.id)
-    await message.answer(TEXTS[lang]["vip_coming_soon"])
-
-# -------------------- SUPPORT --------------------
-support_mode = {}  # {user_id: True/False}
+# ---------- SUPPORT ----------
+support_mode = {}
 
 @router.message(F.text.in_(SUPPORT_LABELS))
 async def support_start(message: Message):
@@ -322,49 +356,85 @@ async def support_start(message: Message):
 async def handle_support_message(message: Message):
     user_id = message.from_user.id
     if is_admin(message.from_user):
-        # Adminin yazdığı mesajları rəhbər tutmuruq (cavab üçün ayrıca mexanizm)
         return
     if support_mode.get(user_id, False):
-        # Destek mesajı
         ticket_id = add_support_ticket(user_id, message.text)
-        # Adminə xəbər ver
         await bot.send_message(
-            chat_id=message.chat.id,  # Admin ilə eyni chatda deyil, amma adminə birbaşa göndərək
+            chat_id=message.chat.id,
             text=TEXTS["tr"]["admin_notify"].format(
                 user=f"{message.from_user.full_name} (@{message.from_user.username})",
                 msg=message.text
             )
         )
-        # İstifadəçiyə təşəkkür
         lang = get_user_lang(user_id)
         await message.answer(TEXTS[lang]["support_thanks"])
         support_mode[user_id] = False
     else:
-        # Normal mesaj, heç nə etmə
         pass
 
-# -------------------- ADMIN COMMANDS --------------------
+# ---------- ADMIN COMMANDS ----------
 @router.message(Command("addmatch"))
-async def add_match_command(message: Message):
+async def add_match_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
         return
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer(TEXTS["tr"]["add_match_usage"])
-        return
-    parts = [p.strip() for p in args[1].split('|')]
-    if len(parts) != 6:
-        await message.answer("Lütfen 6 bölümü '|' ile ayırın.\n" + TEXTS["tr"]["add_match_usage"])
-        return
-    date, league, home, away, pred_tr, pred_en = parts
+    await state.set_state(AddMatchStates.waiting_date)
+    await message.answer(TEXTS["tr"]["add_match_date"])
+
+@router.message(AddMatchStates.waiting_date)
+async def add_match_date(message: Message, state: FSMContext):
+    await state.update_data(date=message.text)
+    await state.set_state(AddMatchStates.waiting_league)
+    await message.answer(TEXTS["tr"]["add_match_league"])
+
+@router.message(AddMatchStates.waiting_league)
+async def add_match_league(message: Message, state: FSMContext):
+    await state.update_data(league=message.text)
+    await state.set_state(AddMatchStates.waiting_home)
+    await message.answer(TEXTS["tr"]["add_match_home"])
+
+@router.message(AddMatchStates.waiting_home)
+async def add_match_home(message: Message, state: FSMContext):
+    await state.update_data(home=message.text)
+    await state.set_state(AddMatchStates.waiting_away)
+    await message.answer(TEXTS["tr"]["add_match_away"])
+
+@router.message(AddMatchStates.waiting_away)
+async def add_match_away(message: Message, state: FSMContext):
+    await state.update_data(away=message.text)
+    await state.set_state(AddMatchStates.waiting_prediction)
+    await message.answer(TEXTS["tr"]["add_match_prediction"])
+
+@router.message(AddMatchStates.waiting_prediction)
+async def add_match_prediction(message: Message, state: FSMContext):
+    await state.update_data(prediction=message.text)
+    await state.set_state(AddMatchStates.waiting_analysis)
+    await message.answer(TEXTS["tr"]["add_match_analysis"])
+
+@router.message(AddMatchStates.waiting_analysis)
+async def add_match_analysis(message: Message, state: FSMContext):
+    await state.update_data(analysis=message.text)
+    # Kateqoriya sualı YOXDUR, birbaşa əlavə et
+    data = await state.get_data()
+    date = data.get('date', '')
+    league = data.get('league', '')
+    home = data.get('home', '')
+    away = data.get('away', '')
+    prediction = data.get('prediction', '')
+    analysis = data.get('analysis', '')
+    pred_text_tr = f"📊 *Tahmin:* {prediction}\n\n📝 *Analiz:* {analysis}"
+    pred_text_en = pred_text_tr
+
     import time
     match_id = str(int(time.time() * 1000))
-    add_match(match_id, date, league, home, away, pred_tr, pred_en)
-    await message.answer(TEXTS["tr"]["match_added"].format(match_id=match_id))
+    add_match(match_id, date, league, home, away, pred_text_tr, pred_text_en, 'normal')
+    await message.answer(TEXTS["tr"]["match_added"].format(match_id=match_id), reply_markup=ReplyKeyboardRemove())
+    await state.clear()
 
 @router.message(Command("deletematch"))
 async def delete_match_command(message: Message):
     if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
         return
     args = message.text.split()
     if len(args) < 2:
@@ -377,21 +447,26 @@ async def delete_match_command(message: Message):
 @router.message(Command("listmatches"))
 async def list_matches_command(message: Message):
     if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
         return
     matches = get_all_matches()
     if not matches:
         await message.answer(TEXTS["tr"]["no_matches_list"])
         return
-    lines = [f"• {mid}: {m['date']} {m['home']} - {m['away']}" for mid, m in matches.items()]
+    lines = []
+    for mid, m in matches.items():
+        cat = "VIP" if m.get('category') == 'vip' else "Normal"
+        lines.append(f"• {mid}: {m['date']} {m['home']} - {m['away']} [{cat}]")
     await message.answer(TEXTS["tr"]["match_list"].format(list="\n".join(lines)))
 
 @router.message(Command("reply"))
 async def reply_to_ticket(message: Message):
     if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
         return
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
-        await message.answer("Kullanım: /reply <ticket_id> <cevap>")
+        await message.answer(TEXTS["tr"]["reply_usage"])
         return
     ticket_id = int(args[1])
     reply_text = args[2]
@@ -405,7 +480,7 @@ async def reply_to_ticket(message: Message):
     mark_ticket_replied(ticket_id)
     await message.answer("✅ Yanıt gönderildi.")
 
-# -------------------- FLASK KEEP-ALIVE --------------------
+# ---------- FLASK KEEP-ALIVE ----------
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -416,7 +491,7 @@ def run_flask():
     port = int(os.getenv("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
 
-# -------------------- MAIN --------------------
+# ---------- MAIN ----------
 async def main():
     dp.include_router(router)
     logger.info("Starting polling...")
