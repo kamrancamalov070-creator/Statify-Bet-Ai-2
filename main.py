@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8105745014:AAHqgQunU4gK5fWwi4bFwE1GXuludZpFz3Y")
 ADMIN_USERNAME = "kamrancmlv"
-ADMIN_ID = 1337915501  # Sizin ID-niz
+ADMIN_ID = 1337915501
 STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)
 
 DB_NAME = "bot_data.db"
@@ -170,7 +170,6 @@ def mark_ticket_replied(ticket_id):
     conn.close()
 
 def is_admin(user) -> bool:
-    # həm username, həm də ID ilə yoxla
     if user.username and user.username.lower() == ADMIN_USERNAME.lower():
         return True
     if user.id == ADMIN_ID:
