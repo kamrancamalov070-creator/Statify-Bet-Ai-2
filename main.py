@@ -3,7 +3,6 @@ import logging
 import os
 import sqlite3
 import threading
-import re
 from datetime import datetime
 
 from flask import Flask
@@ -172,30 +171,11 @@ def mark_ticket_replied(ticket_id):
 def is_admin(user) -> bool:
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
 
-def parse_match_date(date_str: str):
-    try:
-        match = re.match(r'(\d{2})\.(\d{2}) (\d{2}):(\d{2})', date_str)
-        if match:
-            day, month, hour, minute = map(int, match.groups())
-            now = datetime.now()
-            year = now.year
-            dt = datetime(year, month, day, hour, minute)
-            return dt
-    except:
-        pass
-    return None
-
-def is_past_match(date_str: str) -> bool:
-    dt = parse_match_date(date_str)
-    if dt:
-        return dt < datetime.now()
-    return False
-
 # ---------- FSM STATES ----------
 class AddMatchStates(StatesGroup):
-    waiting_match_info = State()           # matç adı + tarix
-    waiting_prediction_stats = State()     # proqnoz + statistika
-    waiting_category = State()             # Normal / VIP
+    waiting_match_info = State()
+    waiting_prediction_stats = State()
+    waiting_category = State()
 
 # ---------- BOT & ROUTER ----------
 storage = MemoryStorage()
@@ -342,11 +322,10 @@ async def show_history(message: Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
     all_matches = get_all_matches()
-    past_matches = {mid: m for mid, m in all_matches.items() if is_past_match(m["date"])}
-    if not past_matches:
+    if not all_matches:
         await message.answer(t["no_history"])
         return
-    lines = [f"• {m['date']} – {m['league']}: {m['home']} vs {m['away']}" for mid, m in past_matches.items()]
+    lines = [f"• {m['date']} – {m['league']}: {m['home']} vs {m['away']}" for mid, m in all_matches.items()]
     await message.answer(t["history_text"].format(matches="\n".join(lines)))
 
 # ---------- SUPPORT ----------
@@ -412,19 +391,14 @@ async def add_match_category(message: Message, state: FSMContext):
     data = await state.get_data()
     match_info = data.get('match_info', '')
     prediction_stats = data.get('prediction_stats', '')
-
-    # match_info-nu iki hissəyə bölək: tarix və liqa+komanda
-    # Sadəlik üçün bütün məlumatları 'date' və 'league' sahələrinə yazaq
-    # 'home' və 'away' sahələrini boş buraxaq
     import time
     match_id = str(int(time.time() * 1000))
-    # Məlumatları olduğu kimi saxlayırıq
     add_match(
         match_id=match_id,
-        date=match_info,          # istifadəçinin yazdığı tam mətn
-        league="",                # boş
-        home="",                  # boş
-        away="",                  # boş
+        date=match_info,
+        league="",
+        home="",
+        away="",
         pred_tr=prediction_stats,
         pred_en=prediction_stats,
         category=category
