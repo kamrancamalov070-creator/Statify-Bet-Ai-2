@@ -1,15 +1,7 @@
 TEXTS = {
     "tr": {
         "choose_language": "Lütfen dilinizi seçin:",
-        "welcome": (
-            "🎯 *Hoş geldin, {name}!*\n\n"
-            "Ben **Statify Bet AI** – yapay zeka destekli futbol tahmin botuyum.\n"
-            "Günlük maçları istatistiksel modellerle analiz ediyor, kazanan takım, "
-            "her iki takımın gol atması (KG) ve toplam gol sayısı (Üst/Alt) gibi "
-            "ana piyasalara yönelik tahminler sunuyorum.\n\n"
-            "📊 *Başarı Oranımız:* %%92\n"
-            "✅ Tüm tahminler veriye dayalıdır."
-        ),
+        "welcome": "🎯 *Hoş geldin, {name}!*\n\nBen **Statify Bet AI** – yapay zeka destekli futbol tahmin botuyum.\nGünlük maçları istatistiksel modellerle analiz ediyor, kazanan takım, her iki takımın gol atması (KG) ve toplam gol sayısı (Üst/Alt) gibi ana piyasalara yönelik tahminler sunuyorum.\n\n📊 *Başarı Oranımız:* %%92\n✅ Tüm tahminler veriye dayalıdır.",
         "menu_prompt": "Ana menüden bir seçenek belirleyin:",
         "menu_tips": "📊 Tahminler",
         "menu_history": "📜 Geçmiş",
@@ -23,13 +15,8 @@ TEXTS = {
         "match_not_found": "Maç bulunamadı.",
         "history_text": "📜 *Geçmiş maçlar:*\n{matches}",
         "no_history": "Henüz geçmiş maç bulunmuyor.",
-        "support_prompt": (
-            "🆘 Destek ekibimize mesaj göndermek için aşağıya yazabilirsiniz.\n"
-            "Mesajınız 1-24 saat içinde cevaplandırılacaktır."
-        ),
-        "support_thanks": (
-            "✅ Mesajınız alındı. En kısa sürede (1-24 saat) size dönüş yapılacaktır."
-        ),
+        "support_prompt": "🆘 Destek ekibimize mesaj göndermek için aşağıya yazabilirsiniz.\nMesajınız 1-24 saat içinde cevaplandırılacaktır.",
+        "support_thanks": "✅ Mesajınız alındı. En kısa sürede (1-24 saat) size dönüş yapılacaktır.",
         "support_reply": "📩 Destek ekibinden yanıt:\n\n{reply_text}",
         "admin_notify": "📩 Yeni destek mesajı!\nKullanıcı: {user}\nMesaj: {msg}",
         "error_generic": "Bir hata oluştu, lütfen tekrar deneyin.",
@@ -48,14 +35,7 @@ TEXTS = {
     },
     "en": {
         "choose_language": "Please select your language:",
-        "welcome": (
-            "🎯 *Welcome, {name}!*\n\n"
-            "I am **Statify Bet AI** – an AI-powered football prediction bot.\n"
-            "I analyze daily matches using statistical models and provide tips "
-            "for Match Winner, BTTS, and Over/Under goals.\n\n"
-            "📊 *Success Rate:* 92%%\n"
-            "✅ All predictions are data-driven."
-        ),
+        "welcome": "🎯 *Welcome, {name}!*\n\nI am **Statify Bet AI** – an AI-powered football prediction bot.\nI analyze daily matches using statistical models and provide tips for Match Winner, BTTS, and Over/Under goals.\n\n📊 *Success Rate:* 92%%\n✅ All predictions are data-driven.",
         "menu_prompt": "Choose an option from the main menu:",
         "menu_tips": "📊 Tips",
         "menu_history": "📜 History",
@@ -69,13 +49,8 @@ TEXTS = {
         "match_not_found": "Match not found.",
         "history_text": "📜 *Past matches:*\n{matches}",
         "no_history": "No past matches yet.",
-        "support_prompt": (
-            "🆘 Write your message to our support team below.\n"
-            "Your message will be replied within 1-24 hours."
-        ),
-        "support_thanks": (
-            "✅ Your message has been received. We will reply within 1-24 hours."
-        ),
+        "support_prompt": "🆘 Write your message to our support team below.\nYour message will be replied within 1-24 hours.",
+        "support_thanks": "✅ Your message has been received. We will reply within 1-24 hours.",
         "support_reply": "📩 Support team reply:\n\n{reply_text}",
         "admin_notify": "📩 New support message!\nUser: {user}\nMessage: {msg}",
         "error_generic": "An error occurred, please try again.",
