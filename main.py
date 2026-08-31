@@ -10,7 +10,7 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -23,7 +23,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
-from aiogram.utils.markdown import hbold
 
 from texts import TEXTS
 
@@ -194,13 +193,9 @@ def is_past_match(date_str: str) -> bool:
 
 # ---------- FSM STATES ----------
 class AddMatchStates(StatesGroup):
-    waiting_date = State()
-    waiting_league = State()
-    waiting_home = State()
-    waiting_away = State()
-    waiting_prediction = State()
-    waiting_analysis = State()
-    # Kateqoriya sualı ləğv edildi!
+    waiting_match_info = State()           # matç adı + tarix
+    waiting_prediction_stats = State()     # proqnoz + statistika
+    waiting_category = State()             # Normal / VIP
 
 # ---------- BOT & ROUTER ----------
 storage = MemoryStorage()
@@ -229,7 +224,7 @@ def main_menu_kb(lang: str):
         resize_keyboard=True,
     )
 
-def tips_inline_kb(matches: dict, back_callback='back_to_tips'):
+def tips_inline_kb(matches: dict):
     rows = []
     for match_id, m in matches.items():
         label = f"{m['date']} {m['home']} — {m['away']}"
@@ -247,6 +242,16 @@ def match_detail_text(match_id: str, lang: str):
         f"{m['prediction'][lang]}"
     )
 
+def category_kb(lang: str):
+    t = TEXTS[lang]
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t["category_normal"]), KeyboardButton(text=t["category_vip"])]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
 def _labels(key: str):
     return {TEXTS["tr"][key], TEXTS["en"][key]}
 
@@ -255,6 +260,8 @@ HISTORY_LABELS = _labels("menu_history")
 VIP_LABELS = _labels("menu_vip")
 SUPPORT_LABELS = _labels("menu_support")
 LANGUAGE_LABELS = _labels("menu_language")
+CAT_NORMAL_LABELS = _labels("category_normal")
+CAT_VIP_LABELS = _labels("category_vip")
 
 # ---------- HANDLERS ----------
 @router.message(CommandStart())
@@ -352,7 +359,7 @@ async def support_start(message: Message):
     support_mode[message.from_user.id] = True
     await message.answer(t["support_prompt"])
 
-@router.message(F.text & ~F.text.in_(TIPS_LABELS | HISTORY_LABELS | VIP_LABELS | SUPPORT_LABELS | LANGUAGE_LABELS) & ~F.text.startswith("/"))
+@router.message(F.text & ~F.text.in_(TIPS_LABELS | HISTORY_LABELS | VIP_LABELS | SUPPORT_LABELS | LANGUAGE_LABELS | CAT_NORMAL_LABELS | CAT_VIP_LABELS) & ~F.text.startswith("/"))
 async def handle_support_message(message: Message):
     user_id = message.from_user.id
     if is_admin(message.from_user):
@@ -378,58 +385,60 @@ async def add_match_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user):
         await message.answer(TEXTS["tr"]["admin_denied"])
         return
-    await state.set_state(AddMatchStates.waiting_date)
-    await message.answer(TEXTS["tr"]["add_match_date"])
+    await state.set_state(AddMatchStates.waiting_match_info)
+    await message.answer(TEXTS["tr"]["add_match_info"])
 
-@router.message(AddMatchStates.waiting_date)
-async def add_match_date(message: Message, state: FSMContext):
-    await state.update_data(date=message.text)
-    await state.set_state(AddMatchStates.waiting_league)
-    await message.answer(TEXTS["tr"]["add_match_league"])
+@router.message(AddMatchStates.waiting_match_info)
+async def add_match_info(message: Message, state: FSMContext):
+    await state.update_data(match_info=message.text)
+    await state.set_state(AddMatchStates.waiting_prediction_stats)
+    await message.answer(TEXTS["tr"]["add_match_prediction_stats"])
 
-@router.message(AddMatchStates.waiting_league)
-async def add_match_league(message: Message, state: FSMContext):
-    await state.update_data(league=message.text)
-    await state.set_state(AddMatchStates.waiting_home)
-    await message.answer(TEXTS["tr"]["add_match_home"])
+@router.message(AddMatchStates.waiting_prediction_stats)
+async def add_prediction_stats(message: Message, state: FSMContext):
+    await state.update_data(prediction_stats=message.text)
+    lang = get_user_lang(message.from_user.id)
+    await state.set_state(AddMatchStates.waiting_category)
+    await message.answer(
+        TEXTS[lang]["add_match_category"],
+        reply_markup=category_kb(lang)
+    )
 
-@router.message(AddMatchStates.waiting_home)
-async def add_match_home(message: Message, state: FSMContext):
-    await state.update_data(home=message.text)
-    await state.set_state(AddMatchStates.waiting_away)
-    await message.answer(TEXTS["tr"]["add_match_away"])
-
-@router.message(AddMatchStates.waiting_away)
-async def add_match_away(message: Message, state: FSMContext):
-    await state.update_data(away=message.text)
-    await state.set_state(AddMatchStates.waiting_prediction)
-    await message.answer(TEXTS["tr"]["add_match_prediction"])
-
-@router.message(AddMatchStates.waiting_prediction)
-async def add_match_prediction(message: Message, state: FSMContext):
-    await state.update_data(prediction=message.text)
-    await state.set_state(AddMatchStates.waiting_analysis)
-    await message.answer(TEXTS["tr"]["add_match_analysis"])
-
-@router.message(AddMatchStates.waiting_analysis)
-async def add_match_analysis(message: Message, state: FSMContext):
-    await state.update_data(analysis=message.text)
-    # Kateqoriya sualı YOXDUR, birbaşa əlavə et
+@router.message(AddMatchStates.waiting_category, F.text.in_(CAT_NORMAL_LABELS | CAT_VIP_LABELS))
+async def add_match_category(message: Message, state: FSMContext):
+    lang = get_user_lang(message.from_user.id)
+    t = TEXTS[lang]
+    category = 'vip' if message.text in CAT_VIP_LABELS else 'normal'
     data = await state.get_data()
-    date = data.get('date', '')
-    league = data.get('league', '')
-    home = data.get('home', '')
-    away = data.get('away', '')
-    prediction = data.get('prediction', '')
-    analysis = data.get('analysis', '')
-    pred_text_tr = f"📊 *Tahmin:* {prediction}\n\n📝 *Analiz:* {analysis}"
-    pred_text_en = pred_text_tr
+    match_info = data.get('match_info', '')
+    prediction_stats = data.get('prediction_stats', '')
 
+    # match_info-nu iki hissəyə bölək: tarix və liqa+komanda
+    # Sadəlik üçün bütün məlumatları 'date' və 'league' sahələrinə yazaq
+    # 'home' və 'away' sahələrini boş buraxaq
     import time
     match_id = str(int(time.time() * 1000))
-    add_match(match_id, date, league, home, away, pred_text_tr, pred_text_en, 'normal')
-    await message.answer(TEXTS["tr"]["match_added"].format(match_id=match_id), reply_markup=ReplyKeyboardRemove())
+    # Məlumatları olduğu kimi saxlayırıq
+    add_match(
+        match_id=match_id,
+        date=match_info,          # istifadəçinin yazdığı tam mətn
+        league="",                # boş
+        home="",                  # boş
+        away="",                  # boş
+        pred_tr=prediction_stats,
+        pred_en=prediction_stats,
+        category=category
+    )
+    await message.answer(t["match_added"].format(match_id=match_id), reply_markup=ReplyKeyboardRemove())
     await state.clear()
+
+@router.message(AddMatchStates.waiting_category)
+async def add_match_category_invalid(message: Message):
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(
+        TEXTS[lang]["add_match_category"],
+        reply_markup=category_kb(lang)
+    )
 
 @router.message(Command("deletematch"))
 async def delete_match_command(message: Message):
@@ -456,7 +465,7 @@ async def list_matches_command(message: Message):
     lines = []
     for mid, m in matches.items():
         cat = "VIP" if m.get('category') == 'vip' else "Normal"
-        lines.append(f"• {mid}: {m['date']} {m['home']} - {m['away']} [{cat}]")
+        lines.append(f"• {mid}: {m['date']} {m['league']} {m['home']} - {m['away']} [{cat}]")
     await message.answer(TEXTS["tr"]["match_list"].format(list="\n".join(lines)))
 
 @router.message(Command("reply"))
