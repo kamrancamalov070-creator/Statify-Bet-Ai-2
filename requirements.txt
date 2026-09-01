@@ -1,3 +1,5 @@
-aiogram==3.4.1
+aiogram==3.6.0
 Flask==2.3.3
-pydantic==2.4.2
+pydantic==2.5.0
+setuptools==70.0.0
+wheel==0.43.0
