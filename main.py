@@ -290,8 +290,6 @@ async def show_tips(message: Message):
 
 @router.message(F.text.in_(VIP_LABELS))
 async def show_vip(message: Message):
-    lang = get_user_lang(message.from_user.id)
-    t = TEXTS[lang]
     vip_text = (
         "⭐ *VIP Üzvlük*\n\n"
         "VIP üzvlər üçün xüsusi tahminlər və analizlər!\n"
