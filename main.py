@@ -1,3 +1,4 @@
+# main.py (aiogram 2) - düzəlişlər: menyu itməsi aradan qaldırıldı, match başlığı düzəldi
 import asyncio
 import logging
 import os
@@ -6,22 +7,14 @@ import threading
 from datetime import datetime
 
 from flask import Flask
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters import Command, Text
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils import executor
+from aiogram.utils.markdown import hbold
 
 from texts import TEXTS
 
@@ -35,7 +28,7 @@ STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)
 
 DB_NAME = "bot_data.db"
 
-# ---------- DATABASE ----------
+# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -176,56 +169,53 @@ def is_admin(user) -> bool:
         return True
     return False
 
-# ---------- FSM STATES ----------
+# --- FSM STATES ---
 class AddMatchStates(StatesGroup):
     waiting_match_info = State()
     waiting_prediction_stats = State()
     waiting_category = State()
 
-# ---------- BOT & ROUTER ----------
-storage = MemoryStorage()
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
-dp = Dispatcher(storage=storage)
-router = Router()
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
 
-# ---------- KEYBOARDS ----------
+# --- KEYBOARDS ---
 def language_inline_kb():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🇹🇷 Türkçe", callback_data="lang_tr"),
-                InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en"),
-            ]
-        ]
+    return InlineKeyboardMarkup(row_width=2).add(
+        InlineKeyboardButton(text="🇹🇷 Türkçe", callback_data="lang_tr"),
+        InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en"),
     )
 
 def main_menu_kb(lang: str):
     t = TEXTS[lang]
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=t["menu_tips"]), KeyboardButton(text=t["menu_history"])],
-            [KeyboardButton(text=t["menu_vip"]), KeyboardButton(text=t["menu_support"]), KeyboardButton(text=t["menu_language"])],
+            [KeyboardButton(t["menu_tips"]), KeyboardButton(t["menu_history"])],
+            [KeyboardButton(t["menu_vip"]), KeyboardButton(t["menu_support"]), KeyboardButton(t["menu_language"])],
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
-def tips_inline_kb(matches: dict, show_delete=False):
-    rows = []
+def tips_inline_kb(matches: dict):
+    kb = InlineKeyboardMarkup(row_width=1)
     for match_id, m in matches.items():
-        label = f"{m['date']} {m['home']} — {m['away']}"
-        buttons = [InlineKeyboardButton(text=label, callback_data=f"match_{match_id}")]
-        if show_delete:
-            buttons.append(InlineKeyboardButton(text="🗑 Sil", callback_data=f"delete_{match_id}"))
-        rows.append(buttons)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+        # başlıq üçün date istifadə et (çünki home/away boş ola bilər)
+        label = m['date']
+        kb.add(InlineKeyboardButton(label, callback_data=f"match_{match_id}"))
+    return kb
 
 def match_detail_text(match_id: str, lang: str):
     m = get_match(match_id)
     if not m:
         return None
+    # Əgər home və away boşdursa, başlıq kimi date istifadə et
+    if m['home'] and m['away']:
+        title = f"⚽ *{m['home']} vs {m['away']}*"
+    else:
+        title = f"📌 *{m['date']}*"
     return (
-        f"⚽ *{m['home']} vs {m['away']}*\n"
-        f"🏆 {m['league']}\n"
+        f"{title}\n"
+        f"🏆 {m['league'] if m['league'] else '—'}\n"
         f"🗓 {m['date']}\n\n"
         f"{m['prediction'][lang]}"
     )
@@ -233,9 +223,7 @@ def match_detail_text(match_id: str, lang: str):
 def category_kb(lang: str):
     t = TEXTS[lang]
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=t["category_normal"]), KeyboardButton(text=t["category_vip"])]
-        ],
+        keyboard=[[KeyboardButton(t["category_normal"]), KeyboardButton(t["category_vip"])]],
         resize_keyboard=True,
         one_time_keyboard=True
     )
@@ -251,35 +239,43 @@ LANGUAGE_LABELS = _labels("menu_language")
 CAT_NORMAL_LABELS = _labels("category_normal")
 CAT_VIP_LABELS = _labels("category_vip")
 
-# ---------- HANDLERS ----------
-@router.message(CommandStart())
-async def cmd_start(message: Message):
+# --- HANDLERS ---
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
     await message.answer(
         TEXTS["tr"]["choose_language"],
         reply_markup=language_inline_kb()
     )
 
-@router.callback_query(F.data.startswith("lang_"))
-async def process_language(callback: CallbackQuery):
-    lang = callback.data.split("_", 1)[1]
+@dp.callback_query_handler(lambda c: c.data.startswith('lang_'))
+async def process_language(callback_query: types.CallbackQuery):
+    lang = callback_query.data.split("_", 1)[1]
     if lang not in TEXTS:
         lang = "tr"
-    set_user_lang(callback.from_user.id, lang)
+    set_user_lang(callback_query.from_user.id, lang)
     t = TEXTS[lang]
-    name = callback.from_user.first_name or "İstifadəçi"
-    await callback.message.edit_text(t["welcome"].format(name=name))
-    await callback.message.answer(t["menu_prompt"], reply_markup=main_menu_kb(lang))
-    await callback.answer()
+    name = callback_query.from_user.first_name or "İstifadəçi"
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=t["welcome"].format(name=name)
+    )
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text=t["menu_prompt"],
+        reply_markup=main_menu_kb(lang)
+    )
+    await callback_query.answer()
 
-@router.message(F.text.in_(LANGUAGE_LABELS))
-async def change_language(message: Message):
+@dp.message_handler(lambda m: m.text in LANGUAGE_LABELS)
+async def change_language(message: types.Message):
     await message.answer(
         TEXTS["tr"]["choose_language"],
         reply_markup=language_inline_kb()
     )
 
-@router.message(F.text.in_(TIPS_LABELS))
-async def show_tips(message: Message):
+@dp.message_handler(lambda m: m.text in TIPS_LABELS)
+async def show_tips(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
     matches = get_matches_by_category('normal')
@@ -288,8 +284,8 @@ async def show_tips(message: Message):
         return
     await message.answer(t["tips_title"], reply_markup=tips_inline_kb(matches))
 
-@router.message(F.text.in_(VIP_LABELS))
-async def show_vip(message: Message):
+@dp.message_handler(lambda m: m.text in VIP_LABELS)
+async def show_vip(message: types.Message):
     vip_text = (
         "⭐ *VIP Üzvlük*\n\n"
         "VIP üzvlər üçün xüsusi tahminlər və analizlər!\n"
@@ -298,35 +294,49 @@ async def show_vip(message: Message):
     )
     await message.answer(vip_text, parse_mode="MARKDOWN")
 
-@router.callback_query(F.data.startswith("match_"))
-async def show_match(callback: CallbackQuery):
-    match_id = callback.data.split("_", 1)[1]
-    lang = get_user_lang(callback.from_user.id)
+@dp.callback_query_handler(lambda c: c.data.startswith('match_'))
+async def show_match(callback_query: types.CallbackQuery):
+    match_id = callback_query.data.split("_", 1)[1]
+    lang = get_user_lang(callback_query.from_user.id)
     t = TEXTS[lang]
     text = match_detail_text(match_id, lang)
     if text is None:
-        await callback.answer(t["match_not_found"], show_alert=True)
+        await callback_query.answer(t["match_not_found"], show_alert=True)
         return
-    back_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=t["back"], callback_data="back_to_tips")]]
+    back_kb = InlineKeyboardMarkup(row_width=1).add(
+        InlineKeyboardButton(text=t["back"], callback_data="back_to_tips")
     )
-    await callback.message.edit_text(text, reply_markup=back_kb)
-    await callback.answer()
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=text,
+        reply_markup=back_kb
+    )
+    await callback_query.answer()
 
-@router.callback_query(F.data == "back_to_tips")
-async def back_to_tips(callback: CallbackQuery):
-    lang = get_user_lang(callback.from_user.id)
+@dp.callback_query_handler(lambda c: c.data == 'back_to_tips')
+async def back_to_tips(callback_query: types.CallbackQuery):
+    lang = get_user_lang(callback_query.from_user.id)
     t = TEXTS[lang]
     matches = get_matches_by_category('normal')
     if not matches:
-        await callback.message.edit_text(t["no_matches"])
-        await callback.answer()
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=t["no_matches"]
+        )
+        await callback_query.answer()
         return
-    await callback.message.edit_text(t["tips_title"], reply_markup=tips_inline_kb(matches))
-    await callback.answer()
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=t["tips_title"],
+        reply_markup=tips_inline_kb(matches)
+    )
+    await callback_query.answer()
 
-@router.message(F.text.in_(HISTORY_LABELS))
-async def show_history(message: Message):
+@dp.message_handler(lambda m: m.text in HISTORY_LABELS)
+async def show_history(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
     all_matches = get_all_matches()
@@ -336,18 +346,18 @@ async def show_history(message: Message):
     lines = [f"• {m['date']} – {m['league']}: {m['home']} vs {m['away']}" for mid, m in all_matches.items()]
     await message.answer(t["history_text"].format(matches="\n".join(lines)))
 
-# ---------- SUPPORT ----------
+# --- SUPPORT ---
 support_mode = {}
 
-@router.message(F.text.in_(SUPPORT_LABELS))
-async def support_start(message: Message):
+@dp.message_handler(lambda m: m.text in SUPPORT_LABELS)
+async def support_start(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
     support_mode[message.from_user.id] = True
     await message.answer(t["support_prompt"])
 
-@router.message(F.text & ~F.text.in_(TIPS_LABELS | HISTORY_LABELS | VIP_LABELS | SUPPORT_LABELS | LANGUAGE_LABELS | CAT_NORMAL_LABELS | CAT_VIP_LABELS) & ~F.text.startswith("/"))
-async def handle_support_message(message: Message):
+@dp.message_handler(lambda m: m.text and not m.text.startswith('/') and m.text not in (TIPS_LABELS | HISTORY_LABELS | VIP_LABELS | SUPPORT_LABELS | LANGUAGE_LABELS | CAT_NORMAL_LABELS | CAT_VIP_LABELS))
+async def handle_support_message(message: types.Message):
     user_id = message.from_user.id
     if is_admin(message.from_user):
         return
@@ -366,24 +376,26 @@ async def handle_support_message(message: Message):
     else:
         pass
 
-# ---------- ADMIN COMMANDS ----------
-@router.message(Command("addmatch"))
-async def add_match_start(message: Message, state: FSMContext):
+# --- ADMIN COMMANDS ---
+@dp.message_handler(commands=['addmatch'])
+async def add_match_start(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user):
         await message.answer(TEXTS["tr"]["admin_denied"])
         return
     await state.set_state(AddMatchStates.waiting_match_info)
     await message.answer(TEXTS["tr"]["add_match_info"])
 
-@router.message(AddMatchStates.waiting_match_info)
-async def add_match_info(message: Message, state: FSMContext):
-    await state.update_data(match_info=message.text)
+@dp.message_handler(state=AddMatchStates.waiting_match_info)
+async def add_match_info(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        data['match_info'] = message.text
     await state.set_state(AddMatchStates.waiting_prediction_stats)
     await message.answer(TEXTS["tr"]["add_match_prediction_stats"])
 
-@router.message(AddMatchStates.waiting_prediction_stats)
-async def add_prediction_stats(message: Message, state: FSMContext):
-    await state.update_data(prediction_stats=message.text)
+@dp.message_handler(state=AddMatchStates.waiting_prediction_stats)
+async def add_prediction_stats(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        data['prediction_stats'] = message.text
     lang = get_user_lang(message.from_user.id)
     await state.set_state(AddMatchStates.waiting_category)
     await message.answer(
@@ -391,14 +403,14 @@ async def add_prediction_stats(message: Message, state: FSMContext):
         reply_markup=category_kb(lang)
     )
 
-@router.message(AddMatchStates.waiting_category, F.text.in_(CAT_NORMAL_LABELS | CAT_VIP_LABELS))
-async def add_match_category(message: Message, state: FSMContext):
+@dp.message_handler(state=AddMatchStates.waiting_category, text=CAT_NORMAL_LABELS | CAT_VIP_LABELS)
+async def add_match_category(message: types.Message, state: FSMContext):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
     category = 'vip' if message.text in CAT_VIP_LABELS else 'normal'
-    data = await state.get_data()
-    match_info = data.get('match_info', '')
-    prediction_stats = data.get('prediction_stats', '')
+    async with state.proxy() as data:
+        match_info = data.get('match_info', '')
+        prediction_stats = data.get('prediction_stats', '')
     import time
     match_id = str(int(time.time() * 1000))
     add_match(
@@ -411,19 +423,20 @@ async def add_match_category(message: Message, state: FSMContext):
         pred_en=prediction_stats,
         category=category
     )
-    await message.answer(t["match_added"].format(match_id=match_id), reply_markup=ReplyKeyboardRemove())
-    await state.clear()
+    # Menyunu geri qaytar
+    await message.answer(t["match_added"].format(match_id=match_id), reply_markup=main_menu_kb(lang))
+    await state.finish()
 
-@router.message(AddMatchStates.waiting_category)
-async def add_match_category_invalid(message: Message):
+@dp.message_handler(state=AddMatchStates.waiting_category)
+async def add_match_category_invalid(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     await message.answer(
         TEXTS[lang]["add_match_category"],
         reply_markup=category_kb(lang)
     )
 
-@router.message(Command("deletematch"))
-async def delete_match_command(message: Message):
+@dp.message_handler(commands=['deletematch'])
+async def delete_match_command(message: types.Message):
     if not is_admin(message.from_user):
         await message.answer(TEXTS["tr"]["admin_denied"])
         return
@@ -435,8 +448,8 @@ async def delete_match_command(message: Message):
     delete_match(match_id)
     await message.answer(TEXTS["tr"]["match_deleted"])
 
-@router.message(Command("listmatches"))
-async def list_matches_command(message: Message):
+@dp.message_handler(commands=['listmatches'])
+async def list_matches_command(message: types.Message):
     if not is_admin(message.from_user):
         await message.answer(TEXTS["tr"]["admin_denied"])
         return
@@ -444,67 +457,95 @@ async def list_matches_command(message: Message):
     if not matches:
         await message.answer(TEXTS["tr"]["no_matches_list"])
         return
-    rows = []
+    kb = InlineKeyboardMarkup(row_width=2)
     for mid, m in matches.items():
         label = f"{m['date']} {m['home']} - {m['away']} [{ 'VIP' if m['category']=='vip' else 'Normal' }]"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"list_match_{mid}")])
-        rows.append([InlineKeyboardButton(text="🗑 Sil", callback_data=f"delete_{mid}")])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+        kb.add(
+            InlineKeyboardButton(label, callback_data=f"list_match_{mid}"),
+            InlineKeyboardButton("🗑 Sil", callback_data=f"delete_{mid}")
+        )
     await message.answer("📋 *Mevcut maçlar (silme için butona tıkla):*", reply_markup=kb, parse_mode="MARKDOWN")
 
-@router.callback_query(F.data.startswith("delete_"))
-async def delete_match_callback(callback: CallbackQuery):
-    if not is_admin(callback.from_user):
-        await callback.answer("Bu komutu sadece admin kullanabilir!", show_alert=True)
+@dp.callback_query_handler(lambda c: c.data.startswith('delete_'))
+async def delete_match_callback(callback_query: types.CallbackQuery):
+    if not is_admin(callback_query.from_user):
+        await callback_query.answer("Bu komutu sadece admin kullanabilir!", show_alert=True)
         return
-    match_id = callback.data.split("_", 1)[1]
+    match_id = callback_query.data.split("_", 1)[1]
     delete_match(match_id)
-    await callback.answer("✅ Maç silindi!", show_alert=True)
+    await callback_query.answer("✅ Maç silindi!", show_alert=True)
     matches = get_all_matches()
     if not matches:
-        await callback.message.edit_text("📋 Hiç maç kalmadı.")
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text="📋 Hiç maç kalmadı."
+        )
         return
-    rows = []
+    kb = InlineKeyboardMarkup(row_width=2)
     for mid, m in matches.items():
         label = f"{m['date']} {m['home']} - {m['away']} [{ 'VIP' if m['category']=='vip' else 'Normal' }]"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"list_match_{mid}")])
-        rows.append([InlineKeyboardButton(text="🗑 Sil", callback_data=f"delete_{mid}")])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    await callback.message.edit_text("📋 *Mevcut maçlar (silme için butona tıkla):*", reply_markup=kb, parse_mode="MARKDOWN")
+        kb.add(
+            InlineKeyboardButton(label, callback_data=f"list_match_{mid}"),
+            InlineKeyboardButton("🗑 Sil", callback_data=f"delete_{mid}")
+        )
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text="📋 *Mevcut maçlar (silme için butona tıkla):*",
+        reply_markup=kb,
+        parse_mode="MARKDOWN"
+    )
 
-@router.callback_query(F.data.startswith("list_match_"))
-async def list_match_detail(callback: CallbackQuery):
-    match_id = callback.data.split("_", 2)[2]
-    lang = get_user_lang(callback.from_user.id)
+@dp.callback_query_handler(lambda c: c.data.startswith('list_match_'))
+async def list_match_detail(callback_query: types.CallbackQuery):
+    match_id = callback_query.data.split("_", 2)[2]
+    lang = get_user_lang(callback_query.from_user.id)
     t = TEXTS[lang]
     text = match_detail_text(match_id, lang)
     if text is None:
-        await callback.answer(t["match_not_found"], show_alert=True)
+        await callback_query.answer(t["match_not_found"], show_alert=True)
         return
-    back_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="◀️ Listeye Dön", callback_data="back_to_list")]]
+    back_kb = InlineKeyboardMarkup(row_width=1).add(
+        InlineKeyboardButton(text="◀️ Listeye Dön", callback_data="back_to_list")
     )
-    await callback.message.edit_text(text, reply_markup=back_kb)
-    await callback.answer()
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=text,
+        reply_markup=back_kb
+    )
+    await callback_query.answer()
 
-@router.callback_query(F.data == "back_to_list")
-async def back_to_list(callback: CallbackQuery):
+@dp.callback_query_handler(lambda c: c.data == 'back_to_list')
+async def back_to_list(callback_query: types.CallbackQuery):
     matches = get_all_matches()
     if not matches:
-        await callback.message.edit_text("📋 Hiç maç kalmadı.")
-        await callback.answer()
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text="📋 Hiç maç kalmadı."
+        )
+        await callback_query.answer()
         return
-    rows = []
+    kb = InlineKeyboardMarkup(row_width=2)
     for mid, m in matches.items():
         label = f"{m['date']} {m['home']} - {m['away']} [{ 'VIP' if m['category']=='vip' else 'Normal' }]"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"list_match_{mid}")])
-        rows.append([InlineKeyboardButton(text="🗑 Sil", callback_data=f"delete_{mid}")])
-    kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    await callback.message.edit_text("📋 *Mevcut maçlar (silme için butona tıkla):*", reply_markup=kb, parse_mode="MARKDOWN")
-    await callback.answer()
+        kb.add(
+            InlineKeyboardButton(label, callback_data=f"list_match_{mid}"),
+            InlineKeyboardButton("🗑 Sil", callback_data=f"delete_{mid}")
+        )
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text="📋 *Mevcut maçlar (silme için butona tıkla):*",
+        reply_markup=kb,
+        parse_mode="MARKDOWN"
+    )
+    await callback_query.answer()
 
-@router.message(Command("reply"))
-async def reply_to_ticket(message: Message):
+@dp.message_handler(commands=['reply'])
+async def reply_to_ticket(message: types.Message):
     if not is_admin(message.from_user):
         await message.answer(TEXTS["tr"]["admin_denied"])
         return
@@ -524,9 +565,8 @@ async def reply_to_ticket(message: Message):
     mark_ticket_replied(ticket_id)
     await message.answer("✅ Yanıt gönderildi.")
 
-# ---------- FLASK KEEP-ALIVE ----------
+# --- FLASK KEEP-ALIVE ---
 flask_app = Flask(__name__)
-
 @flask_app.route("/")
 def health():
     return "Statify Bet AI is running!"
@@ -535,12 +575,7 @@ def run_flask():
     port = int(os.getenv("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
 
-# ---------- MAIN ----------
-async def main():
-    dp.include_router(router)
-    logger.info("Starting polling...")
-    await dp.start_polling(bot)
-
+# --- MAIN ---
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
