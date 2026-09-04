@@ -41,8 +41,9 @@ DB_NAME = "bot_data.db"
 # ---------- VIP PLANS (Telegram Stars) ----------
 # "stars" = Telegram Stars price (XTR). Edit freely — no external payment provider needed.
 VIP_PLANS = {
-    "vip_30": {"label": "1 Aylıq VIP", "days": 30, "stars": 150},
-    "vip_90": {"label": "3 Aylıq VIP", "days": 90, "stars": 400},
+    "vip_3d": {"days": 3, "stars": 150, "label": {"tr": "3 Günlük VIP", "en": "3-Day VIP"}},
+    "vip_7d": {"days": 7, "stars": 250, "label": {"tr": "1 Haftalık VIP", "en": "1-Week VIP"}},
+    "vip_30d": {"days": 30, "stars": 500, "label": {"tr": "1 Aylık VIP", "en": "1-Month VIP"}},
 }
 
 # ---------- DATABASE ----------
@@ -396,13 +397,14 @@ def tips_inline_kb(matches: dict, category: str, show_delete=False):
         rows.append(buttons)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def vip_plans_kb(show_tips_button=False):
+def vip_plans_kb(lang: str, show_tips_button=False):
+    t = TEXTS[lang]
     rows = []
     if show_tips_button:
-        rows.append([InlineKeyboardButton(text="📊 VIP Tahminlərinə bax", callback_data="viptips")])
+        rows.append([InlineKeyboardButton(text=t["vip_tips_button"], callback_data="viptips")])
     for key, plan in VIP_PLANS.items():
         rows.append([InlineKeyboardButton(
-            text=f"{plan['label']} — {plan['stars']} ⭐",
+            text=f"{plan['label'][lang]} — {plan['stars']} ⭐",
             callback_data=f"buyvip_{key}"
         )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -484,45 +486,41 @@ async def show_tips(message: Message):
 @router.message(F.text.in_(VIP_LABELS))
 async def show_vip(message: Message):
     user_id = message.from_user.id
+    lang = get_user_lang(user_id)
+    t = TEXTS[lang]
 
     if is_vip(user_id):
         expiry = get_vip_expiry(user_id)
         expiry_str = datetime.fromisoformat(expiry).strftime("%d.%m.%Y")
-        text = (
-            "⭐ *VIP üzvlüyünüz aktivdir!*\n\n"
-            f"🗓 Bitmə tarixi: {expiry_str}\n\n"
-            "VIP tahminlərə baxa və ya müddətinizi artıra bilərsiniz:"
-        )
+        text = t["vip_active_status"].format(expiry=expiry_str)
     else:
-        text = (
-            "⭐ *VIP Üzvlük*\n\n"
-            "VIP üzvlər üçün xüsusi tahminlər və analizlər əldə edin!\n"
-            "Telegram Stars ilə ödəniş edərək dərhal aktivləşdirin 👇"
-        )
+        text = t["vip_intro"]
 
     await message.answer(
         text,
         parse_mode="MARKDOWN",
-        reply_markup=vip_plans_kb(show_tips_button=is_vip(user_id))
+        reply_markup=vip_plans_kb(lang, show_tips_button=is_vip(user_id))
     )
 
 @router.callback_query(F.data.startswith("buyvip_"))
 async def buy_vip(callback: CallbackQuery):
+    lang = get_user_lang(callback.from_user.id)
+    t = TEXTS[lang]
     key = callback.data.split("_", 1)[1]
     plan = VIP_PLANS.get(key)
     if not plan:
-        await callback.answer("❌ Plan tapılmadı.", show_alert=True)
+        await callback.answer(t["plan_not_found"], show_alert=True)
         return
 
     await callback.answer()
     await bot.send_invoice(
         chat_id=callback.from_user.id,
-        title=plan["label"],
-        description=f"{plan['days']} gün ərzində VIP tahminlərə giriş",
+        title=plan["label"][lang],
+        description=t["invoice_description"].format(days=plan["days"]),
         payload=f"vip_{key}_{callback.from_user.id}",
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice(label=plan["label"], amount=plan["stars"])],
+        prices=[LabeledPrice(label=plan["label"][lang], amount=plan["stars"])],
     )
 
 @router.pre_checkout_query()
@@ -531,14 +529,17 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
 
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message):
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
+    t = TEXTS[lang]
+
     payment = message.successful_payment
     payload_parts = payment.invoice_payload.split("_")
     key = payload_parts[1] if len(payload_parts) > 1 else None
     plan = VIP_PLANS.get(key)
-    user_id = message.from_user.id
 
     if not plan:
-        await message.answer("❌ Ödənişdə xəta baş verdi. Zəhmət olmasa adminlə əlaqə saxlayın: @kamrancmlv")
+        await message.answer(t["payment_error"])
         return
 
     new_expiry = extend_vip(user_id, plan["days"])
@@ -546,10 +547,7 @@ async def process_successful_payment(message: Message):
 
     expiry_str = new_expiry.strftime("%d.%m.%Y")
     await message.answer(
-        "✅ *Ödəniş uğurla tamamlandı!*\n\n"
-        f"⭐ {plan['label']} aktivləşdirildi.\n"
-        f"🗓 Bitmə tarixi: {expiry_str}\n\n"
-        "İndi VIP tahminlərə baxa bilərsiniz!"
+        t["payment_success"].format(plan=plan["label"][lang], expiry=expiry_str)
     )
 
     try:
@@ -557,7 +555,7 @@ async def process_successful_payment(message: Message):
             ADMIN_ID,
             "💰 *Yeni VIP ödənişi!*\n"
             f"İstifadəçi: {message.from_user.full_name} (@{message.from_user.username})\n"
-            f"Plan: {plan['label']}\n"
+            f"Plan: {plan['label']['tr']}\n"
             f"Stars: {payment.total_amount} ⭐"
         )
     except Exception:
@@ -566,17 +564,20 @@ async def process_successful_payment(message: Message):
 @router.callback_query(F.data == "viptips")
 async def show_vip_tips(callback: CallbackQuery):
     user_id = callback.from_user.id
+    lang = get_user_lang(user_id)
+    t = TEXTS[lang]
+
     if not is_vip(user_id):
-        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        await callback.answer(t["vip_denied"], show_alert=True)
         return
 
     matches = get_matches_by_category('vip')
     if not matches:
-        await callback.message.edit_text("⚠️ Hazırda VIP tahmin yoxdur.")
+        await callback.message.edit_text(t["no_vip_matches"])
         await callback.answer()
         return
 
-    await callback.message.edit_text("⭐ *VIP Tahminlər:*", reply_markup=tips_inline_kb(matches, 'vip'))
+    await callback.message.edit_text(t["vip_tips_title"], reply_markup=tips_inline_kb(matches, 'vip'))
     await callback.answer()
 
 @router.callback_query(F.data.startswith("match_"))
@@ -586,7 +587,7 @@ async def show_match(callback: CallbackQuery):
     t = TEXTS[lang]
 
     if category == "vip" and not is_vip(callback.from_user.id):
-        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        await callback.answer(t["vip_denied"], show_alert=True)
         return
 
     text = match_detail_text(match_id, lang)
@@ -613,15 +614,17 @@ async def back_to_normal_tips(callback: CallbackQuery):
 
 @router.callback_query(F.data == "back_vip")
 async def back_to_vip_tips(callback: CallbackQuery):
+    lang = get_user_lang(callback.from_user.id)
+    t = TEXTS[lang]
     if not is_vip(callback.from_user.id):
-        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        await callback.answer(t["vip_denied"], show_alert=True)
         return
     matches = get_matches_by_category('vip')
     if not matches:
-        await callback.message.edit_text("⚠️ Hazırda VIP tahmin yoxdur.")
+        await callback.message.edit_text(t["no_vip_matches"])
         await callback.answer()
         return
-    await callback.message.edit_text("⭐ *VIP Tahminlər:*", reply_markup=tips_inline_kb(matches, 'vip'))
+    await callback.message.edit_text(t["vip_tips_title"], reply_markup=tips_inline_kb(matches, 'vip'))
     await callback.answer()
 
 @router.message(F.text.in_(HISTORY_LABELS))
@@ -800,6 +803,27 @@ async def list_matches_command(message: Message):
     )
 
 
+@router.message(Command("vipmatches"))
+async def list_vip_matches_command(message: Message):
+    """Admin-only: shows just VIP-category matches so you can quickly check
+    what predictions were added to the VIP bucket."""
+    if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
+        return
+
+    all_matches = get_all_matches()
+    vip_matches = {mid: m for mid, m in all_matches.items() if m.get("category") == "vip"}
+
+    if not vip_matches:
+        await message.answer("⭐ Hələ VIP maç əlavə edilməyib.")
+        return
+
+    await message.answer(
+        "⭐ *VIP maçlar*\n\nHər hansı bir maçın üzərinə basaraq təxmini görə bilərsən.",
+        reply_markup=admin_match_list_kb(vip_matches)
+    )
+
+
 async def refresh_admin_match_list(callback: CallbackQuery):
     matches = get_all_matches()
 
@@ -860,6 +884,10 @@ async def move_match_to_active(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("list_match_"))
 async def list_match_detail(callback: CallbackQuery):
+    if not is_admin(callback.from_user):
+        await callback.answer("Bu əməliyyat yalnız admin üçündür.", show_alert=True)
+        return
+
     match_id = callback.data.split("_", 2)[2]
     lang = get_user_lang(callback.from_user.id)
     text = match_detail_text(match_id, lang)
