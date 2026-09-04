@@ -1,6 +1,6 @@
 TEXTS = {
     "tr": {
-        "choose_language": "Lütfen dilinizi seçin:",
+        "choose_language": "Choose Your Language:",
         "welcome": "🎯 *Hoş geldin, {name}!*\n\nBen **Statify Bet AI** – yapay zeka destekli futbol tahmin botuyum.\nGünlük maçları istatistiksel modellerle analiz ediyor, kazanan takım, her iki takımın gol atması (KG) ve toplam gol sayısı (Üst/Alt) gibi ana piyasalara yönelik tahminler sunuyorum.\n\n📊 *Başarı Oranımız:* %%92\n✅ Tüm tahminler veriye dayalıdır.",
         "menu_prompt": "Ana menüden bir seçenek belirleyin:",
         "menu_tips": "📊 Tahminler",
@@ -31,6 +31,16 @@ TEXTS = {
         "admin_denied": "❌ Bu komutu yalnız admin kullanabilir.",
         "delete_match_usage": "Kullanım: /deletematch <match_id>",
         "reply_usage": "Kullanım: /reply <ticket_id> <cevap>",
+        "vip_active_status": "⭐ *VIP üyeliğiniz aktif!*\n\n🗓 Bitiş tarihi: {expiry}\n\nVIP tahminlere bakabilir veya süreyi uzatabilirsiniz:",
+        "vip_intro": "⭐ *VIP Üyelik*\n\nVIP üyeler için özel tahminler ve analizler edinin!\nTelegram Stars ile ödeme yaparak hemen aktifleştirin 👇",
+        "vip_tips_button": "📊 VIP Tahminlere bak",
+        "vip_tips_title": "⭐ *VIP Tahminler:*",
+        "no_vip_matches": "⚠️ Şu anda VIP tahmin yok.",
+        "vip_denied": "❌ VIP üyeliğiniz yok veya süresi bitti.",
+        "plan_not_found": "❌ Plan bulunamadı.",
+        "invoice_description": "{days} gün boyunca VIP tahminlere erişim",
+        "payment_error": "❌ Ödemede bir hata oluştu. Lütfen adminle iletişime geçin: @kamrancmlv",
+        "payment_success": "✅ *Ödeme başarıyla tamamlandı!*\n\n⭐ {plan} aktifleştirildi.\n🗓 Bitiş tarihi: {expiry}\n\nArtık VIP tahminlere bakabilirsiniz!",
     },
     "en": {
         "choose_language": "Please select your language:",
@@ -64,5 +74,15 @@ TEXTS = {
         "admin_denied": "❌ This command is for admin only.",
         "delete_match_usage": "Usage: /deletematch <match_id>",
         "reply_usage": "Usage: /reply <ticket_id> <reply>",
+        "vip_active_status": "⭐ *Your VIP membership is active!*\n\n🗓 Expires on: {expiry}\n\nYou can view VIP tips or extend your membership:",
+        "vip_intro": "⭐ *VIP Membership*\n\nGet exclusive tips and analysis for VIP members!\nPay with Telegram Stars to activate instantly 👇",
+        "vip_tips_button": "📊 View VIP Tips",
+        "vip_tips_title": "⭐ *VIP Tips:*",
+        "no_vip_matches": "⚠️ No VIP tips available right now.",
+        "vip_denied": "❌ You don't have an active VIP membership.",
+        "plan_not_found": "❌ Plan not found.",
+        "invoice_description": "{days}-day access to VIP tips",
+        "payment_error": "❌ There was an error processing your payment. Please contact the admin: @kamrancmlv",
+        "payment_success": "✅ *Payment completed successfully!*\n\n⭐ {plan} activated.\n🗓 Expires on: {expiry}\n\nYou can now view VIP tips!",
     }
 }
