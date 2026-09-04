@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Flask
 from aiogram import Bot, Dispatcher, F, Router
@@ -19,7 +19,9 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    LabeledPrice,
     Message,
+    PreCheckoutQuery,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
@@ -36,6 +38,13 @@ STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)
 
 DB_NAME = "bot_data.db"
 
+# ---------- VIP PLANS (Telegram Stars) ----------
+# "stars" = Telegram Stars price (XTR). Edit freely — no external payment provider needed.
+VIP_PLANS = {
+    "vip_30": {"label": "1 Aylıq VIP", "days": 30, "stars": 150},
+    "vip_90": {"label": "3 Aylıq VIP", "days": 90, "stars": 400},
+}
+
 # ---------- DATABASE ----------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -51,6 +60,12 @@ def init_db():
                  (ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER, message TEXT, timestamp TEXT,
                   replied INTEGER DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS vip_users
+                 (user_id INTEGER PRIMARY KEY, expires_at TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS payments
+                 (payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER, plan TEXT, stars INTEGER,
+                  charge_id TEXT, timestamp TEXT)''')
     try:
         c.execute("ALTER TABLE matches ADD COLUMN category TEXT DEFAULT 'normal'")
     except sqlite3.OperationalError:
@@ -226,6 +241,49 @@ def is_admin(user) -> bool:
         return True
     return False
 
+# ---------- VIP MEMBERSHIP ----------
+def get_vip_expiry(user_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT expires_at FROM vip_users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def is_vip(user_id: int) -> bool:
+    expires_at = get_vip_expiry(user_id)
+    if not expires_at:
+        return False
+    return datetime.fromisoformat(expires_at) > datetime.now()
+
+def extend_vip(user_id: int, days: int) -> datetime:
+    """Adds `days` on top of remaining time if still active, otherwise starts from now."""
+    current = get_vip_expiry(user_id)
+    now = datetime.now()
+    if current:
+        current_dt = datetime.fromisoformat(current)
+        base = current_dt if current_dt > now else now
+    else:
+        base = now
+    new_expiry = base + timedelta(days=days)
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO vip_users (user_id, expires_at) VALUES (?, ?)",
+              (user_id, new_expiry.isoformat()))
+    conn.commit()
+    conn.close()
+    return new_expiry
+
+def log_payment(user_id: int, plan: str, stars: int, charge_id: str):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    timestamp = datetime.now().isoformat()
+    c.execute("INSERT INTO payments (user_id, plan, stars, charge_id, timestamp) VALUES (?,?,?,?,?)",
+              (user_id, plan, stars, charge_id, timestamp))
+    conn.commit()
+    conn.close()
+
 # ---------- MATCH INPUT PARSER ----------
 
 def parse_match_info(text: str):
@@ -328,14 +386,25 @@ def main_menu_kb(lang: str):
         resize_keyboard=True,
     )
 
-def tips_inline_kb(matches: dict, show_delete=False):
+def tips_inline_kb(matches: dict, category: str, show_delete=False):
     rows = []
     for match_id, m in matches.items():
         label = f"{m['date']} {m['home']} — {m['away']}"
-        buttons = [InlineKeyboardButton(text=label, callback_data=f"match_{match_id}")]
+        buttons = [InlineKeyboardButton(text=label, callback_data=f"match_{category}_{match_id}")]
         if show_delete:
             buttons.append(InlineKeyboardButton(text="🗑 Sil", callback_data=f"delete_{match_id}"))
         rows.append(buttons)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def vip_plans_kb(show_tips_button=False):
+    rows = []
+    if show_tips_button:
+        rows.append([InlineKeyboardButton(text="📊 VIP Tahminlərinə bax", callback_data="viptips")])
+    for key, plan in VIP_PLANS.items():
+        rows.append([InlineKeyboardButton(
+            text=f"{plan['label']} — {plan['stars']} ⭐",
+            callback_data=f"buyvip_{key}"
+        )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def match_detail_text(match_id: str, lang: str):
@@ -410,35 +479,128 @@ async def show_tips(message: Message):
     if not matches:
         await message.answer(t["no_matches"])
         return
-    await message.answer(t["tips_title"], reply_markup=tips_inline_kb(matches))
+    await message.answer(t["tips_title"], reply_markup=tips_inline_kb(matches, 'normal'))
 
 @router.message(F.text.in_(VIP_LABELS))
 async def show_vip(message: Message):
-    vip_text = (
-        "⭐ *VIP Üzvlük*\n\n"
-        "VIP üzvlər üçün xüsusi tahminlər və analizlər!\n"
-        "VIP olmaq üçün kanalımıza qoşulun: @statifybetvip\n"
-        "Ödənişli üzvlük üçün adminə yazın: @kamrancmlv"
+    user_id = message.from_user.id
+
+    if is_vip(user_id):
+        expiry = get_vip_expiry(user_id)
+        expiry_str = datetime.fromisoformat(expiry).strftime("%d.%m.%Y")
+        text = (
+            "⭐ *VIP üzvlüyünüz aktivdir!*\n\n"
+            f"🗓 Bitmə tarixi: {expiry_str}\n\n"
+            "VIP tahminlərə baxa və ya müddətinizi artıra bilərsiniz:"
+        )
+    else:
+        text = (
+            "⭐ *VIP Üzvlük*\n\n"
+            "VIP üzvlər üçün xüsusi tahminlər və analizlər əldə edin!\n"
+            "Telegram Stars ilə ödəniş edərək dərhal aktivləşdirin 👇"
+        )
+
+    await message.answer(
+        text,
+        parse_mode="MARKDOWN",
+        reply_markup=vip_plans_kb(show_tips_button=is_vip(user_id))
     )
-    await message.answer(vip_text, parse_mode="MARKDOWN")
+
+@router.callback_query(F.data.startswith("buyvip_"))
+async def buy_vip(callback: CallbackQuery):
+    key = callback.data.split("_", 1)[1]
+    plan = VIP_PLANS.get(key)
+    if not plan:
+        await callback.answer("❌ Plan tapılmadı.", show_alert=True)
+        return
+
+    await callback.answer()
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title=plan["label"],
+        description=f"{plan['days']} gün ərzində VIP tahminlərə giriş",
+        payload=f"vip_{key}_{callback.from_user.id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=plan["label"], amount=plan["stars"])],
+    )
+
+@router.pre_checkout_query()
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@router.message(F.successful_payment)
+async def process_successful_payment(message: Message):
+    payment = message.successful_payment
+    payload_parts = payment.invoice_payload.split("_")
+    key = payload_parts[1] if len(payload_parts) > 1 else None
+    plan = VIP_PLANS.get(key)
+    user_id = message.from_user.id
+
+    if not plan:
+        await message.answer("❌ Ödənişdə xəta baş verdi. Zəhmət olmasa adminlə əlaqə saxlayın: @kamrancmlv")
+        return
+
+    new_expiry = extend_vip(user_id, plan["days"])
+    log_payment(user_id, key, payment.total_amount, payment.telegram_payment_charge_id)
+
+    expiry_str = new_expiry.strftime("%d.%m.%Y")
+    await message.answer(
+        "✅ *Ödəniş uğurla tamamlandı!*\n\n"
+        f"⭐ {plan['label']} aktivləşdirildi.\n"
+        f"🗓 Bitmə tarixi: {expiry_str}\n\n"
+        "İndi VIP tahminlərə baxa bilərsiniz!"
+    )
+
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            "💰 *Yeni VIP ödənişi!*\n"
+            f"İstifadəçi: {message.from_user.full_name} (@{message.from_user.username})\n"
+            f"Plan: {plan['label']}\n"
+            f"Stars: {payment.total_amount} ⭐"
+        )
+    except Exception:
+        logger.warning("Admin bildirişi göndərilə bilmədi.")
+
+@router.callback_query(F.data == "viptips")
+async def show_vip_tips(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_vip(user_id):
+        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        return
+
+    matches = get_matches_by_category('vip')
+    if not matches:
+        await callback.message.edit_text("⚠️ Hazırda VIP tahmin yoxdur.")
+        await callback.answer()
+        return
+
+    await callback.message.edit_text("⭐ *VIP Tahminlər:*", reply_markup=tips_inline_kb(matches, 'vip'))
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("match_"))
 async def show_match(callback: CallbackQuery):
-    match_id = callback.data.split("_", 1)[1]
+    _, category, match_id = callback.data.split("_", 2)
     lang = get_user_lang(callback.from_user.id)
     t = TEXTS[lang]
+
+    if category == "vip" and not is_vip(callback.from_user.id):
+        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        return
+
     text = match_detail_text(match_id, lang)
     if text is None:
         await callback.answer(t["match_not_found"], show_alert=True)
         return
     back_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=t["back"], callback_data="back_to_tips")]]
+        inline_keyboard=[[InlineKeyboardButton(text=t["back"], callback_data=f"back_{category}")]]
     )
     await callback.message.edit_text(text, reply_markup=back_kb)
     await callback.answer()
 
-@router.callback_query(F.data == "back_to_tips")
-async def back_to_tips(callback: CallbackQuery):
+@router.callback_query(F.data == "back_normal")
+async def back_to_normal_tips(callback: CallbackQuery):
     lang = get_user_lang(callback.from_user.id)
     t = TEXTS[lang]
     matches = get_matches_by_category('normal')
@@ -446,7 +608,20 @@ async def back_to_tips(callback: CallbackQuery):
         await callback.message.edit_text(t["no_matches"])
         await callback.answer()
         return
-    await callback.message.edit_text(t["tips_title"], reply_markup=tips_inline_kb(matches))
+    await callback.message.edit_text(t["tips_title"], reply_markup=tips_inline_kb(matches, 'normal'))
+    await callback.answer()
+
+@router.callback_query(F.data == "back_vip")
+async def back_to_vip_tips(callback: CallbackQuery):
+    if not is_vip(callback.from_user.id):
+        await callback.answer("❌ VIP üzvlüyünüz yoxdur və ya bitib.", show_alert=True)
+        return
+    matches = get_matches_by_category('vip')
+    if not matches:
+        await callback.message.edit_text("⚠️ Hazırda VIP tahmin yoxdur.")
+        await callback.answer()
+        return
+    await callback.message.edit_text("⭐ *VIP Tahminlər:*", reply_markup=tips_inline_kb(matches, 'vip'))
     await callback.answer()
 
 @router.message(F.text.in_(HISTORY_LABELS))
