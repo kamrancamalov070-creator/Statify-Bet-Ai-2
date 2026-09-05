@@ -1,6 +1,6 @@
 TEXTS = {
     "tr": {
-        "choose_language": "Lütfen dilinizi seçin:",
+        "choose_language": "Choose your language:",
         "welcome": "🎯 *Hoş geldin, {name}!*\n\nBen **Statify Bet AI** – yapay zeka destekli futbol tahmin botuyum.\nGünlük maçları istatistiksel modellerle analiz ediyor, kazanan takım, her iki takımın gol atması (KG) ve toplam gol sayısı (Üst/Alt) gibi ana piyasalara yönelik tahminler sunuyorum.\n\n📊 *Başarı Oranımız:* %%92\n✅ Tüm tahminler veriye dayalıdır.",
         "menu_prompt": "Ana menüden bir seçenek belirleyin:",
         "menu_tips": "📊 Tahminler",
@@ -41,6 +41,7 @@ TEXTS = {
         "invoice_description": "{days} gün boyunca VIP tahminlere erişim",
         "payment_error": "❌ Ödemede bir hata oluştu. Lütfen adminle iletişime geçin: @kamrancmlv",
         "payment_success": "✅ *Ödeme başarıyla tamamlandı!*\n\n⭐ {plan} aktifleştirildi.\n🗓 Bitiş tarihi: {expiry}\n\nArtık VIP tahminlere bakabilirsiniz!",
+        "bot_updated_notice": "🔄 *Bot güncellendi!*\n\nYeni özellikler eklendi, menünüz yenilendi. Aşağıdaki düğmelerle devam edebilirsiniz 👇",
     },
     "en": {
         "choose_language": "Please select your language:",
@@ -84,5 +85,6 @@ TEXTS = {
         "invoice_description": "{days}-day access to VIP tips",
         "payment_error": "❌ There was an error processing your payment. Please contact the admin: @kamrancmlv",
         "payment_success": "✅ *Payment completed successfully!*\n\n⭐ {plan} activated.\n🗓 Expires on: {expiry}\n\nYou can now view VIP tips!",
+        "bot_updated_notice": "🔄 *Bot updated!*\n\nNew features were added and your menu has been refreshed. Continue with the buttons below 👇",
     }
 }
