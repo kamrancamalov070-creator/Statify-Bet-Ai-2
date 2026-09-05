@@ -36,7 +36,12 @@ ADMIN_USERNAME = "kamrancmlv"
 ADMIN_ID = 1337915501
 STATS_IMAGE_URL = os.getenv("STATS_IMAGE_URL", None)
 
-DB_NAME = "bot_data.db"
+DB_NAME = os.getenv("DB_PATH", "bot_data.db")
+
+# Bump this string whenever you ship a change that alters buttons/menus.
+# On the next startup, the bot will notify every saved user and resend
+# their menu automatically — no need to manually message everyone.
+APP_VERSION = "1.1"
 
 # ---------- VIP PLANS (Telegram Stars) ----------
 # "stars" = Telegram Stars price (XTR). Edit freely — no external payment provider needed.
@@ -68,6 +73,8 @@ def init_db():
                  (payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER, plan TEXT, stars INTEGER,
                   charge_id TEXT, timestamp TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_meta
+                 (key TEXT PRIMARY KEY, value TEXT)''')
     try:
         c.execute("ALTER TABLE matches ADD COLUMN category TEXT DEFAULT 'normal'")
     except sqlite3.OperationalError:
@@ -86,6 +93,7 @@ def init_db():
     conn.close()
 
 init_db()
+logger.info(f"📁 Verilənlər bazası yolu: {os.path.abspath(DB_NAME)}")
 
 def get_user_lang(user_id: int) -> str:
     conn = sqlite3.connect(DB_NAME)
@@ -99,6 +107,30 @@ def set_user_lang(user_id: int, lang: str):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO users (user_id, lang) VALUES (?, ?)", (user_id, lang))
+    conn.commit()
+    conn.close()
+
+def get_all_user_ids():
+    """Returns a list of (user_id, lang) for every user who has ever used the bot."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT user_id, lang FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_bot_meta(key: str):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT value FROM bot_meta WHERE key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_bot_meta(key: str, value: str):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
 
@@ -671,6 +703,7 @@ async def back_to_vip_tips(callback: CallbackQuery):
 async def show_history(message: Message):
     lang = get_user_lang(message.from_user.id)
     t = TEXTS[lang]
+    result_labels = RESULT_LABELS.get(lang, RESULT_LABELS["tr"])
 
     all_matches = get_all_matches()
     history_matches = {
@@ -682,13 +715,42 @@ async def show_history(message: Message):
         await message.answer(t["no_history"])
         return
 
-    lines = [
-        f"• {RESULT_ICONS.get(m.get('result', 'pending'), '⏳')} {m['date']} – {m['home']} vs {m['away']}"
-        for mid, m in history_matches.items()
-    ]
+    cutoff = datetime.now().date() - timedelta(days=3)
+
+    grouped = {}
+    for mid, m in history_matches.items():
+        try:
+            match_date = datetime.strptime(m["date"], "%d.%m.%Y").date()
+        except ValueError:
+            continue
+        if match_date < cutoff:
+            continue
+        grouped.setdefault(m["date"], []).append(m)
+
+    if not grouped:
+        await message.answer(t["no_history"])
+        return
+
+    def _sort_key(d):
+        try:
+            return datetime.strptime(d, "%d.%m.%Y")
+        except ValueError:
+            return datetime.min
+
+    sections = []
+    for date_str in sorted(grouped.keys(), key=_sort_key, reverse=True):
+        block_lines = [f"📅 *{date_str}*"]
+        for m in grouped[date_str]:
+            result = m.get("result", "pending")
+            result_line = f"{RESULT_ICONS.get(result, '⏳')} {result_labels[result]}"
+            block_lines.append(
+                f"⚽ {m['home']} vs {m['away']} — {result_line}\n"
+                f"📊 {m['prediction'][lang]}"
+            )
+        sections.append("\n".join(block_lines))
 
     await message.answer(
-        t["history_text"].format(matches="\n".join(lines))
+        t["history_text"].format(matches="\n\n".join(sections))
     )
 
 
@@ -1009,6 +1071,39 @@ async def reply_to_ticket(message: Message):
     mark_ticket_replied(ticket_id)
     await message.answer("✅ Yanıt gönderildi.")
 
+
+@router.message(Command("broadcast"))
+async def broadcast_command(message: Message):
+    """Admin-only: sends a notification to every user who has ever used the bot."""
+    if not is_admin(message.from_user):
+        await message.answer(TEXTS["tr"]["admin_denied"])
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "İstifadə: `/broadcast <mesaj>`\n\n"
+            "Məsələn: `/broadcast Bugün 3 yeni VIP təxmin əlavə olundu!`"
+        )
+        return
+
+    broadcast_text = parts[1]
+    users = get_all_user_ids()
+
+    sent, failed = 0, 0
+    for user_id, _lang in users:
+        try:
+            await bot.send_message(user_id, f"📢 {broadcast_text}")
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await message.answer(
+        f"✅ *Bildiriş göndərildi.*\n\n"
+        f"📨 Çatdırıldı: {sent}\n"
+        f"❌ Uğursuz: {failed}"
+    )
+
 @router.message(F.text & ~F.text.in_(TIPS_LABELS | HISTORY_LABELS | VIP_LABELS | SUPPORT_LABELS | LANGUAGE_LABELS | CAT_NORMAL_LABELS | CAT_VIP_LABELS) & ~F.text.startswith("/"))
 async def handle_support_message(message: Message):
     user_id = message.from_user.id
@@ -1044,8 +1139,38 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=port)
 
 # ---------- MAIN ----------
+async def notify_users_on_update():
+    """If APP_VERSION changed since last run, ping every saved user so their
+    reply-keyboard menu refreshes (new/changed buttons need a fresh keyboard
+    to appear — this does it for everyone automatically, no manual /start needed)."""
+    stored_version = get_bot_meta("app_version")
+    if stored_version == APP_VERSION:
+        return
+
+    users = get_all_user_ids()
+    logger.info(f"🔄 Yeni versiya aşkarlandı ({stored_version} → {APP_VERSION}). {len(users)} istifadəçiyə bildiriş göndərilir...")
+
+    sent, failed = 0, 0
+    for user_id, lang in users:
+        lang = lang or "tr"
+        t = TEXTS.get(lang, TEXTS["tr"])
+        try:
+            await bot.send_message(
+                user_id,
+                t.get("bot_updated_notice", "🔄 Bot güncellendi! Menü yenilendi."),
+                reply_markup=main_menu_kb(lang)
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+
+    set_bot_meta("app_version", APP_VERSION)
+    logger.info(f"✅ Yeniləmə bildirişi: {sent} uğurlu, {failed} uğursuz.")
+
+
 async def main():
     dp.include_router(router)
+    await notify_users_on_update()
     logger.info("Starting polling...")
     await dp.start_polling(bot)
 
